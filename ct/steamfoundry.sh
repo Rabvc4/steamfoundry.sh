@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-export COMMUNITY_SCRIPTS_URL="${COMMUNITY_SCRIPTS_URL:-https://raw.githubusercontent.com/Rabvc4/ProxmoxVED/main}"
+export COMMUNITY_SCRIPTS_URL="${COMMUNITY_SCRIPTS_URL:-https://raw.githubusercontent.com/Rabvc4/steamfoundry.sh/main}"
 source <(curl -fsSL "$COMMUNITY_SCRIPTS_URL/misc/build.func")
 
 # Copyright (c) 2026 Ryan Best
