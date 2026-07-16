@@ -27,31 +27,96 @@ $STD apt install -y \
 
 msg_ok "Installed Dependencies"
 
+#
+# Derive a Linux service-account name from the startup executable.
+#
+# Example:
+#   PalServer.sh -> palserver
+#
+
+EXECUTABLE_NAME="$(basename "$STEAMFOUNDRY_START_EXEC")"
+SERVICE_USER="${EXECUTABLE_NAME%.*}"
+
+SERVICE_USER="$(
+  printf '%s' "$SERVICE_USER" |
+    tr '[:upper:]' '[:lower:]' |
+    sed 's/[^a-z0-9_-]/-/g' |
+    sed 's/^[^a-z_]/game-/'
+)"
+
+SERVICE_USER="${SERVICE_USER:0:31}"
+
+if [[ -z "$SERVICE_USER" || "$SERVICE_USER" == "root" ]]; then
+  SERVICE_USER="gameserver"
+fi
+
+if getent passwd "$SERVICE_USER" >/dev/null; then
+  SERVICE_USER="gameserver"
+fi
+
+if getent passwd "$SERVICE_USER" >/dev/null; then
+  msg_error "Unable to select an unused service-account name."
+  exit 1
+fi
+
+SERVICE_HOME="/var/lib/${SERVICE_USER}"
+
+msg_info "Creating Service Account ${SERVICE_USER}"
+
+useradd \
+  --system \
+  --user-group \
+  --home-dir "$SERVICE_HOME" \
+  --create-home \
+  --shell /usr/sbin/nologin \
+  "$SERVICE_USER"
+
+msg_ok "Created Service Account ${SERVICE_USER}"
+
 msg_info "Creating Application Directories"
 
 mkdir -p /opt/game-server
 
 msg_ok "Created Application Directories"
 
+msg_info "Installing Valve SteamCMD"
+
 fetch_and_deploy_from_url \
   "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" \
   "/opt/steamcmd"
 
-msg_info "Installing Steam App ${STEAMFOUNDRY_APP_ID}"
+chown -R "$SERVICE_USER:$SERVICE_USER" \
+  "$SERVICE_HOME" \
+  /opt/steamcmd \
+  /opt/game-server
 
-msg_info "Initializing SteamCMD"
+msg_ok "Installed Valve SteamCMD"
 
-$STD /opt/steamcmd/steamcmd.sh \
-  +quit
+#
+# Allow SteamCMD to update and initialize itself before attempting the
+# application installation. The retry loop handles temporary Steam backend
+# errors such as "Missing configuration."
+#
 
-msg_ok "Initialized SteamCMD"
+msg_info "Initializing Valve SteamCMD"
+
+if $STD runuser -u "$SERVICE_USER" -- \
+  env HOME="$SERVICE_HOME" \
+  /opt/steamcmd/steamcmd.sh \
+  +quit; then
+  msg_ok "Initialized Valve SteamCMD"
+else
+  msg_warn "SteamCMD initialization returned an error; continuing with installation attempts"
+fi
 
 msg_info "Installing Steam App ${STEAMFOUNDRY_APP_ID}"
 
 install_succeeded=0
 
 for attempt in 1 2 3; do
-  if $STD /opt/steamcmd/steamcmd.sh \
+  if $STD runuser -u "$SERVICE_USER" -- \
+    env HOME="$SERVICE_HOME" \
+    /opt/steamcmd/steamcmd.sh \
     +force_install_dir /opt/game-server \
     +login anonymous \
     +app_update "$STEAMFOUNDRY_APP_ID" validate \
@@ -62,7 +127,7 @@ for attempt in 1 2 3; do
   fi
 
   if ((attempt < 3)); then
-    msg_warn "SteamCMD install attempt ${attempt} failed; retrying in 15 seconds"
+    msg_warn "SteamCMD attempt ${attempt} failed; retrying in 15 seconds"
     sleep 15
   fi
 done
@@ -71,8 +136,6 @@ if ((install_succeeded == 0)); then
   msg_error "Failed to install Steam App ${STEAMFOUNDRY_APP_ID} after 3 attempts"
   exit 1
 fi
-
-msg_ok "Installed Steam App ${STEAMFOUNDRY_APP_ID}"
 
 msg_ok "Installed Steam App ${STEAMFOUNDRY_APP_ID}"
 
@@ -85,6 +148,11 @@ fi
 
 chmod +x "$START_PATH"
 
+chown -R "$SERVICE_USER:$SERVICE_USER" \
+  "$SERVICE_HOME" \
+  /opt/steamcmd \
+  /opt/game-server
+
 msg_info "Creating SteamFoundry Configuration"
 
 {
@@ -96,9 +164,16 @@ msg_info "Creating SteamFoundry Configuration"
 
   printf 'START_ARGS=%q\n' \
     "$STEAMFOUNDRY_START_ARGS"
+
+  printf 'SERVICE_USER=%q\n' \
+    "$SERVICE_USER"
+
+  printf 'SERVICE_HOME=%q\n' \
+    "$SERVICE_HOME"
 } >/etc/steamfoundry.conf
 
-chmod 0600 /etc/steamfoundry.conf
+chown "root:$SERVICE_USER" /etc/steamfoundry.conf
+chmod 0640 /etc/steamfoundry.conf
 
 msg_ok "Created SteamFoundry Configuration"
 
@@ -116,7 +191,7 @@ cd /opt/game-server
 START_PATH="/opt/game-server/${START_EXEC#./}"
 
 if [[ -n "$START_ARGS" ]]; then
-  # START_ARGS is trusted administrator input stored in a root-only file.
+  # START_ARGS is trusted administrator input stored in a protected file.
   eval "set -- $START_ARGS"
   exec "$START_PATH" "$@"
 else
@@ -134,7 +209,9 @@ set -Eeuo pipefail
 source /etc/steamfoundry.conf
 
 update_server() {
-  /opt/steamcmd/steamcmd.sh \
+  runuser -u "$SERVICE_USER" -- \
+    env HOME="$SERVICE_HOME" \
+    /opt/steamcmd/steamcmd.sh \
     +force_install_dir /opt/game-server \
     +login anonymous \
     +app_update "$APP_ID" \
@@ -161,7 +238,7 @@ if update_server; then
 else
   exit_code=$?
 
-  # Attempt to bring the server back after a failed update.
+  # Attempt to restore the previously working server after a failed update.
   if ((was_active)); then
     systemctl start game-server.service || true
   fi
@@ -190,7 +267,7 @@ ExecStart=/usr/local/sbin/update-game-server --install-only
 RemainAfterExit=yes
 UPDATE_UNIT
 
-cat >/etc/systemd/system/game-server.service <<'GAME_UNIT'
+cat >/etc/systemd/system/game-server.service <<GAME_UNIT
 [Unit]
 Description=Steam Game Server
 Wants=network-online.target game-server-update.service
@@ -198,8 +275,9 @@ After=network-online.target game-server-update.service
 
 [Service]
 Type=simple
-User=root
-Environment=HOME=/root
+User=${SERVICE_USER}
+Group=${SERVICE_USER}
+Environment=HOME=${SERVICE_HOME}
 Environment=LANG=C.UTF-8
 WorkingDirectory=/opt/game-server
 ExecStart=/usr/local/sbin/start-game-server
@@ -217,7 +295,7 @@ systemctl daemon-reload
 systemctl enable -q game-server.service
 
 # The application was installed immediately above. Skip a duplicate update
-# during this first service start. The marker disappears after an LXC reboot.
+# during the first service start. This marker disappears after an LXC reboot.
 touch /run/game-server-skip-boot-update
 
 systemctl start game-server.service
