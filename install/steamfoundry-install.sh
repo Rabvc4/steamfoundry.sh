@@ -39,11 +39,40 @@ fetch_and_deploy_from_url \
 
 msg_info "Installing Steam App ${STEAMFOUNDRY_APP_ID}"
 
+msg_info "Initializing SteamCMD"
+
 $STD /opt/steamcmd/steamcmd.sh \
-  +force_install_dir /opt/game-server \
-  +login anonymous \
-  +app_update "$STEAMFOUNDRY_APP_ID" validate \
   +quit
+
+msg_ok "Initialized SteamCMD"
+
+msg_info "Installing Steam App ${STEAMFOUNDRY_APP_ID}"
+
+install_succeeded=0
+
+for attempt in 1 2 3; do
+  if $STD /opt/steamcmd/steamcmd.sh \
+    +force_install_dir /opt/game-server \
+    +login anonymous \
+    +app_update "$STEAMFOUNDRY_APP_ID" validate \
+    +quit; then
+
+    install_succeeded=1
+    break
+  fi
+
+  if ((attempt < 3)); then
+    msg_warn "SteamCMD install attempt ${attempt} failed; retrying in 15 seconds"
+    sleep 15
+  fi
+done
+
+if ((install_succeeded == 0)); then
+  msg_error "Failed to install Steam App ${STEAMFOUNDRY_APP_ID} after 3 attempts"
+  exit 1
+fi
+
+msg_ok "Installed Steam App ${STEAMFOUNDRY_APP_ID}"
 
 msg_ok "Installed Steam App ${STEAMFOUNDRY_APP_ID}"
 
