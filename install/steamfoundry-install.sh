@@ -108,7 +108,7 @@ update_server() {
   /opt/steamcmd/steamcmd.sh \
     +force_install_dir /opt/game-server \
     +login anonymous \
-    +app_update "$APP_ID" validate \
+    +app_update "$APP_ID" \
     +quit
 }
 
