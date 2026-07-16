@@ -100,7 +100,7 @@ msg_ok "Installed Valve SteamCMD"
 
 msg_info "Initializing Valve SteamCMD"
 
-if $STD runuser -u "$SERVICE_USER" -- \
+if runuser -u "$SERVICE_USER" -- \
   env HOME="$SERVICE_HOME" \
   /opt/steamcmd/steamcmd.sh \
   +quit; then
@@ -114,7 +114,7 @@ msg_info "Installing Steam App ${STEAMFOUNDRY_APP_ID}"
 install_succeeded=0
 
 for attempt in 1 2 3; do
-  if $STD runuser -u "$SERVICE_USER" -- \
+  if runuser -u "$SERVICE_USER" -- \
     env HOME="$SERVICE_HOME" \
     /opt/steamcmd/steamcmd.sh \
     +force_install_dir /opt/game-server \
